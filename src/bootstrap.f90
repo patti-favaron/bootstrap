@@ -9,6 +9,7 @@ module bootstrap
 
     public :: boot_mean
     public :: boot_multi_mean
+    public :: boot_decoupled_mean
 
 contains
 
@@ -237,5 +238,119 @@ contains
         rTimeSorting = rTimeSorting + rTimeTo - rTimeFrom
 
     end function boot_multi_mean
+
+
+    function boot_decoupled_mean( &
+        rmX, &
+        iBootSize, &
+        rvInf, &
+        rvAvg, &
+        rvSup, &
+        rTimeRandom, &
+        rTimeSampling, &
+        rTimeSorting &
+    ) result(iRetCode)
+
+        ! Routine arguments
+        real, dimension(:,:), intent(in)                :: rmX
+        integer, intent(in)                             :: iBootSize
+        real, dimension(:), intent(out)                 :: rvInf
+        real, dimension(:), intent(out)                 :: rvAvg
+        real, dimension(:), intent(out)                 :: rvSup
+        real(8), intent(out)                            :: rTimeRandom
+        real(8), intent(out)                            :: rTimeSampling
+        real(8), intent(out)                            :: rTimeSorting
+        integer                                         :: iRetCode
+
+        ! Locals
+        real, dimension(:), allocatable         :: rvSample
+        integer, dimension(:,:), allocatable    :: imIdx
+        real, dimension(:,:), allocatable       :: rmRand
+        integer                                 :: i
+        integer                                 :: j
+        integer                                 :: n
+        integer                                 :: iItem
+        integer                                 :: iSample
+        integer                                 :: iSel025
+        integer                                 :: iSel975
+        real, dimension(:,:), allocatable       :: rmBootMean
+        real(8)                                 :: rTimeFrom
+        real(8)                                 :: rTimeTo
+
+        ! Assume success (will falsify on failure)
+        iRetCode = 0
+
+        ! Initialize random number generator
+        call random_init(repeatable=.false., image_distinct=.true.)
+
+        ! Check parameters
+        n = size(rmX, dim=1)
+        if(n < 10) then
+            iRetCode = 1
+            return
+        end if
+        if(iBootSize <= 0) then
+            iRetCode = 2
+            return
+        end if
+
+        ! **********************
+        ! * Bootstrap sampling *
+        ! **********************
+
+        ! Reserve space for output
+        allocate(rmBootMean(iBootSize, 4))
+
+        ! Initialization
+        rTimeRandom   = 0.d0
+        rTimeSampling = 0.d0
+        allocate(rmRand(n,iBootSize))
+        allocate(imIdx(n,iBootSize))
+        rmBootMean = 0.0
+
+        ! Random generation
+        call cpu_time(rTimeFrom)
+        call random_number(rmRand)
+        imIdx = int(rmRand * n) + 1
+        call cpu_time(rTimeTo)
+        rTimeRandom = rTimeTo - rTimeFrom
+
+        ! Sampling
+        call cpu_time(rTimeFrom)
+        rmBootMean = 0.0
+        do concurrent(iSample = 1:iBootSize, i = 1:n)
+            j = imIdx(i,iSample)
+            rmBootMean(iSample,:) = rmBootMean(iSample,:) + rmX(j,:)
+        end do
+        rmBootMean = rmBootMean / n
+        call cpu_time(rTimeTo)
+        rTimeSampling = rTimeTo - rTimeFrom
+
+        ! Reclaim memory no longer used
+        deallocate(imIdx)
+        deallocate(rmRand)
+
+        ! Compute conventional average
+        rvAvg = sum(rmX, dim=1) / n
+
+        ! *********************************
+        ! * Compute the confidence limits *
+        ! *********************************
+        call cpu_time(rTimeFrom)
+        do i = 1, 4
+            allocate(rvSample(iBootSize))
+            iSel025 = 0.025 * iBootSize
+            iSel975 = 0.975 * iBootSize
+            rvSample = rmBootMean(:,i)
+            call quick_select(rvSample, iSel025)
+            rvInf(i) = rvSample(iSel025)
+            call quick_select(rvSample, iSel975)
+            rvSup(i) = rvSample(iSel975)
+            deallocate(rvSample)
+        end do
+        call cpu_time(rTimeTo)
+        rTimeSorting = rTimeSorting + rTimeTo - rTimeFrom
+
+    end function boot_decoupled_mean
 
 end module bootstrap
